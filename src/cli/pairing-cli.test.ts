@@ -22,8 +22,16 @@ const normalizeChannelId = vi.fn((raw: string) => {
 });
 const getPairingAdapter = vi.fn((channel: string) => ({
   idLabel: pairingIdLabels[channel] ?? "userId",
+  generateQrCode:
+    channel === "deltachat"
+      ? vi.fn().mockResolvedValue({
+          ok: true,
+          qrCodeData: "https://test.example.com/qr",
+          qrCodeImage: "[QR code ASCII]",
+        })
+      : undefined,
 }));
-const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage"]);
+const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage", "deltachat"]);
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests,
@@ -70,14 +78,14 @@ describe("pairing cli", () => {
       },
     ]);
 
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = new Command();
     program.name("test");
     registerPairingCli(program);
     await program.parseAsync(["pairing", "list", "--channel", "telegram"], {
       from: "user",
     });
-    const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    const output = _log.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(output).toContain("telegramUserId");
     expect(output).toContain("123");
   });
@@ -146,16 +154,62 @@ describe("pairing cli", () => {
       },
     ]);
 
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = new Command();
     program.name("test");
     registerPairingCli(program);
     await program.parseAsync(["pairing", "list", "--channel", "discord"], {
       from: "user",
     });
-    const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    const output = _log.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(output).toContain("discordUserId");
     expect(output).toContain("999");
+  });
+
+  it("generates QR code for deltachat with default options", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(["pairing", "generate"], {
+      from: "user",
+    });
+
+    const output = _log.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(output).toContain("[QR code ASCII]");
+    expect(output).toContain("https://test.example.com/qr");
+  });
+
+  it("generates QR code for deltachat with file output", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    getPairingAdapter.mockClear();
+
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(["pairing", "generate", "--output", "/tmp/qr.txt"], {
+      from: "user",
+    });
+
+    expect(getPairingAdapter).toHaveBeenCalledWith("deltachat");
+  });
+
+  it("throws error when channel does not support QR generation", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    getPairingAdapter.mockReturnValueOnce({ idLabel: "userId" }); // No generateQrCode method
+
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+
+    await expect(
+      program.parseAsync(["pairing", "generate", "--channel", "telegram"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("Channel telegram does not support QR code generation");
   });
 
   it("accepts channel as positional for approve (npm-run compatible)", async () => {
@@ -170,7 +224,7 @@ describe("pairing cli", () => {
       },
     });
 
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = new Command();
     program.name("test");
     registerPairingCli(program);
@@ -182,7 +236,78 @@ describe("pairing cli", () => {
       channel: "telegram",
       code: "ABCDEFGH",
     });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+    expect(_log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("accepts --channel and --code options for approve", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    approveChannelPairingCode.mockResolvedValueOnce({
+      id: "456",
+      entry: {
+        id: "456",
+        code: "5NQ7DX6G",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+      },
+    });
+
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(
+      ["pairing", "approve", "--channel", "deltachat", "--code", "5NQ7DX6G"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(approveChannelPairingCode).toHaveBeenCalledWith({
+      channel: "deltachat",
+      code: "5NQ7DX6G",
+    });
+    expect(_log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("accepts --channel with positional code for approve", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    approveChannelPairingCode.mockResolvedValueOnce({
+      id: "789",
+      entry: {
+        id: "789",
+        code: "XYZ999",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+      },
+    });
+
+    const _log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(["pairing", "approve", "--channel", "telegram", "XYZ999"], {
+      from: "user",
+    });
+
+    expect(approveChannelPairingCode).toHaveBeenCalledWith({
+      channel: "telegram",
+      code: "XYZ999",
+    });
+    expect(_log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
+  it("throws error when --code is used without --channel", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+
+    await expect(
+      program.parseAsync(["pairing", "approve", "--code", "5NQ7DX6G"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("Channel required");
   });
 
   it("forwards --account for approve", async () => {

@@ -679,6 +679,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Delta.Chat**: Add complete Delta.Chat channel extension with JSON-RPC integration, QR code pairing, security policies (DMs: disabled/pairing/allowlist/open; groups: allowlist/open), media support, and group configuration with mention detection. (#eae884ad) Thanks @Claude Opus 4.6.
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Subagents: discourage direct messaging tool use unless a specific external recipient is requested.
