@@ -38,6 +38,21 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
+    // Extract provider and model from the primary model string (format: "provider/model")
+    const primaryModel = params.cfg.agents?.defaults?.model?.primary;
+    let provider: string | undefined;
+    let model: string | undefined;
+    if (primaryModel) {
+      const [extractedProvider, extractedModel] = primaryModel.split("/", 2);
+      if (extractedModel) {
+        provider = extractedProvider;
+        model = extractedModel;
+      } else {
+        // If no "/" found, treat the whole string as the model
+        model = primaryModel;
+      }
+    }
+
     const result = await runEmbeddedPiAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
@@ -49,6 +64,8 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       prompt,
       timeoutMs: 15_000, // 15 second timeout
       runId: `slug-gen-${Date.now()}`,
+      provider,
+      model,
     });
 
     // Extract text from payloads
