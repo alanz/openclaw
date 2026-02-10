@@ -46,6 +46,33 @@ describe("pi tool definition adapter", () => {
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
   });
 
+  it("returns success for identical-content edit errors instead of error", async () => {
+    const tool = {
+      name: "edit",
+      label: "Edit",
+      description: "edit files",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw new Error(
+          "No changes made to /tmp/HEARTBEAT.md. The replacement produced identical content.",
+        );
+      },
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const result = await def.execute("call-noop", {}, undefined, undefined, extensionContext);
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      tool: "edit",
+      message: "Content already matches, no changes needed.",
+    });
+  });
+
   it("normalizes exec tool aliases in error results", async () => {
     const result = await executeThrowingTool("bash", "call2");
 
