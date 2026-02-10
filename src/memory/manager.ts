@@ -388,7 +388,15 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const stat = await fs.lstat(absPath);
+    let stat;
+    try {
+      stat = await fs.lstat(absPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error("path required");
     }

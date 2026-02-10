@@ -326,4 +326,35 @@ describe("memory index", () => {
       );
     }
   });
+
+  it("returns empty text for non-existent memory files instead of throwing ENOENT", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager;
+
+    // Try to read a file that doesn't exist (like today's memory file)
+    const nonExistentPath = "memory/2026-02-10.md";
+    const readResult = await result.manager.readFile({ relPath: nonExistentPath });
+    expect(readResult).toEqual({
+      path: nonExistentPath,
+      text: "",
+    });
+  });
 });
