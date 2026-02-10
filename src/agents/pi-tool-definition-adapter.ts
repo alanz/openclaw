@@ -148,6 +148,16 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             consumeAdjustedParamsForToolCall(toolCallId);
           }
           const described = describeToolExecutionError(err);
+          // Treat "identical content" edits as a no-op success so the model
+          // doesn't retry in a tight loop (e.g. heartbeat HEARTBEAT.md edits).
+          if (described.message.includes("produced identical content")) {
+            logDebug(`[tools] ${normalizedName}: no-op (content already matches)`);
+            return jsonResult({
+              status: "ok",
+              tool: normalizedName,
+              message: "Content already matches, no changes needed.",
+            });
+          }
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }

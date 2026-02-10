@@ -25,6 +25,29 @@ describe("pi tool definition adapter", () => {
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
   });
 
+  it("returns success for identical-content edit errors instead of error", async () => {
+    const tool = {
+      name: "edit",
+      label: "Edit",
+      description: "edit files",
+      parameters: {},
+      execute: async () => {
+        throw new Error(
+          "No changes made to /tmp/HEARTBEAT.md. The replacement produced identical content.",
+        );
+      },
+    } satisfies AgentTool<unknown, unknown>;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute("call-noop", {}, undefined, undefined);
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      tool: "edit",
+      message: "Content already matches, no changes needed.",
+    });
+  });
+
   it("normalizes exec tool aliases in error results", async () => {
     const tool = {
       name: "bash",
