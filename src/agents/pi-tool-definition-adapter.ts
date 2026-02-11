@@ -158,6 +158,17 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               message: "Content already matches, no changes needed.",
             });
           }
+          // Treat "could not find exact text" edit errors as non-retryable
+          // to prevent retry loops when file content has changed.
+          if (described.message.includes("Could not find the exact text")) {
+            logDebug(`[tools] ${normalizedName}: text not found (file may have changed)`);
+            return jsonResult({
+              status: "error",
+              tool: normalizedName,
+              error:
+                "Edit failed: could not find the exact text to replace. The file content may have changed since you last read it. Please re-read the file to see its current state before attempting another edit.",
+            });
+          }
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }

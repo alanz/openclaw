@@ -48,6 +48,30 @@ describe("pi tool definition adapter", () => {
     });
   });
 
+  it("returns non-retryable error for could-not-find-text edit failures", async () => {
+    const tool = {
+      name: "edit",
+      label: "Edit",
+      description: "edit files",
+      parameters: {},
+      execute: async () => {
+        throw new Error(
+          "Could not find the exact text in MEMORY.md. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    } satisfies AgentTool<unknown, unknown>;
+
+    const defs = toToolDefinitions([tool]);
+    const result = await defs[0].execute("call-edit-notfound", {}, undefined, undefined);
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      tool: "edit",
+      error: expect.stringContaining("could not find the exact text to replace"),
+    });
+    expect(result.details.error).toContain("Please re-read the file");
+  });
+
   it("normalizes exec tool aliases in error results", async () => {
     const tool = {
       name: "bash",
