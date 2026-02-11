@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
 
@@ -38,6 +38,8 @@ describe("memory index", () => {
   let indexVectorPath = "";
   let indexMainPath = "";
   let indexExtraPath = "";
+  let indexPath = "";
+  let manager: MemoryIndexManager | null = null;
 
   // Perf: keep managers open across tests, but only reset the one a test uses.
   const managersByStorePath = new Map<string, MemoryIndexManager>();
@@ -51,6 +53,7 @@ describe("memory index", () => {
     indexMainPath = path.join(workspaceDir, "index-main.sqlite");
     indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
     indexExtraPath = path.join(workspaceDir, "index-extra.sqlite");
+    indexPath = path.join(workspaceDir, "index.sqlite");
 
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(
@@ -75,6 +78,13 @@ describe("memory index", () => {
 
     // Clean additional paths that may have been created by earlier cases.
     await fs.rm(extraDir, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
   });
 
   function resetManagerForTest(manager: MemoryIndexManager) {

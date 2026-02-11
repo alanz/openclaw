@@ -20,6 +20,8 @@ export type ResolvedMemorySearchConfig = {
       concurrency: number;
       pollIntervalMs: number;
       timeoutMinutes: number;
+      rpmLimit?: number;
+      rpdLimit?: number;
     };
   };
   experimental: {

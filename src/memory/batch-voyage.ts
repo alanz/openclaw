@@ -5,6 +5,7 @@ import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-e
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
+import type { TokenBucketRateLimiter } from "./rate-limiter.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
@@ -45,7 +46,12 @@ async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<VoyageBatchStatus> {
+  // Acquire permits for file upload (1) + batch create (1)
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(2);
+  }
   const baseUrl = normalizeBatchBaseUrl(params.client);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
   const form = new FormData();
@@ -191,6 +197,7 @@ export async function runVoyageEmbeddingBatches(params: {
   timeoutMs: number;
   concurrency: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<Map<string, number[]>> {
   if (params.requests.length === 0) {
     return new Map();
@@ -203,6 +210,7 @@ export async function runVoyageEmbeddingBatches(params: {
       client: params.client,
       requests: group,
       agentId: params.agentId,
+      rateLimiter: params.rateLimiter,
     });
     if (!batchInfo.id) {
       throw new Error("voyage batch create failed: missing batch id");

@@ -15,6 +15,21 @@ import type {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { resolveUserPath } from "../utils.js";
+import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
+import {
+  OPENAI_BATCH_ENDPOINT,
+  type OpenAiBatchRequest,
+  runOpenAiEmbeddingBatches,
+} from "./batch-openai.js";
+import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
+import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
+import { isEmbeddingRateLimitError } from "./embedding-errors.js";
+import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
+import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -28,6 +43,34 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { memoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { memoryManagerSyncOps } from "./manager-sync-ops.js";
+import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import { getOrCreateRateLimiter, type TokenBucketRateLimiter } from "./rate-limiter.js";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
+  sessionPathForFile,
+  type SessionFileEntry,
+} from "./session-files.js";
+import { loadSqliteVecExtension } from "./sqlite-vec.js";
+import { requireNodeSqlite } from "./sqlite.js";
+
+type MemoryIndexMeta = {
+  model: string;
+  provider: string;
+  providerKey?: string;
+  chunkTokens: number;
+  chunkOverlap: number;
+  vectorDims?: number;
+};
+
+type MemorySyncProgressState = {
+  completed: number;
+  total: number;
+  label?: string;
+  report: (update: MemorySyncProgressUpdate) => void;
+};
+
+const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -64,6 +107,7 @@ export class MemoryIndexManager implements MemorySearchManager {
   private batchFailureLastError?: string;
   private batchFailureLastProvider?: string;
   private batchFailureLock: Promise<void> = Promise.resolve();
+  private rateLimiter: TokenBucketRateLimiter | null = null;
   private db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
   private providerKey: string;
@@ -181,6 +225,24 @@ export class MemoryIndexManager implements MemorySearchManager {
     const statusOnly = params.purpose === "status";
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
+
+    // Initialize rate limiter based on provider
+    if (this.provider.id === "gemini" && this.gemini) {
+      this.rateLimiter = getOrCreateRateLimiter("gemini", this.gemini, {
+        rpmLimit: params.settings.remote?.batch?.rpmLimit ?? 100, // Gemini default
+        rpdLimit: params.settings.remote?.batch?.rpdLimit ?? 1000, // Gemini default
+      });
+    } else if (this.provider.id === "openai" && this.openAi) {
+      this.rateLimiter = getOrCreateRateLimiter("openai", this.openAi, {
+        rpmLimit: params.settings.remote?.batch?.rpmLimit, // No default, opt-in
+        rpdLimit: params.settings.remote?.batch?.rpdLimit,
+      });
+    } else if (this.provider.id === "voyage" && this.voyage) {
+      this.rateLimiter = getOrCreateRateLimiter("voyage", this.voyage, {
+        rpmLimit: params.settings.remote?.batch?.rpmLimit, // No default, opt-in
+        rpdLimit: params.settings.remote?.batch?.rpdLimit,
+      });
+    }
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -505,6 +567,14 @@ export class MemoryIndexManager implements MemorySearchManager {
         lastError: this.batchFailureLastError,
         lastProvider: this.batchFailureLastProvider,
       },
+      rateLimit: this.rateLimiter
+        ? {
+            availableRpm: this.rateLimiter.getStatus().availableRpm,
+            availableRpd: this.rateLimiter.getStatus().availableRpd,
+            configuredRpm: this.settings.remote?.batch?.rpmLimit,
+            configuredRpd: this.settings.remote?.batch?.rpdLimit,
+          }
+        : undefined,
     };
   }
 

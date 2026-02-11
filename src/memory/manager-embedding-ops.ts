@@ -12,6 +12,7 @@ import {
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
+import { isEmbeddingRateLimitError } from "./embedding-errors.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
 import {
   chunkMarkdown,
@@ -339,6 +340,7 @@ class MemoryManagerEmbeddingOps {
     pollIntervalMs: number;
     timeoutMs: number;
     debug: (message: string, data: Record<string, unknown>) => void;
+    rateLimiter?: TokenBucketRateLimiter;
   } {
     const { requests, chunks, source } = params;
     return {
@@ -349,6 +351,7 @@ class MemoryManagerEmbeddingOps {
       pollIntervalMs: this.batch.pollIntervalMs,
       timeoutMs: this.batch.timeoutMs,
       debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+      rateLimiter: this.rateLimiter,
     };
   }
 
@@ -505,6 +508,12 @@ class MemoryManagerEmbeddingOps {
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
+        // RPD (requests per day) errors should not be retried - daily quota exhaustion
+        // requires waiting until the next day, not retrying after a few seconds
+        if (isEmbeddingRateLimitError(err) && err.quotaType === "rpd") {
+          throw err;
+        }
+
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;

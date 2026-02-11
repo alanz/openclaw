@@ -1,4 +1,5 @@
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import type { TokenBucketRateLimiter } from "./rate-limiter.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl, splitBatchRequests } from "./batch-utils.js";
@@ -82,7 +83,13 @@ async function submitGeminiBatch(params: {
   gemini: GeminiEmbeddingClient;
   requests: GeminiBatchRequest[];
   agentId: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<GeminiBatchStatus> {
+  // Acquire permits for file upload (1) + batch create (1)
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(2);
+  }
+
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const jsonl = params.requests
     .map((request) =>
@@ -256,6 +263,7 @@ export async function runGeminiEmbeddingBatches(params: {
   timeoutMs: number;
   concurrency: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<Map<string, number[]>> {
   if (params.requests.length === 0) {
     return new Map();
@@ -268,6 +276,7 @@ export async function runGeminiEmbeddingBatches(params: {
       gemini: params.gemini,
       requests: group,
       agentId: params.agentId,
+      rateLimiter: params.rateLimiter,
     });
     const batchName = batchInfo.name ?? "";
     if (!batchName) {
