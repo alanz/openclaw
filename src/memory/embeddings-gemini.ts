@@ -5,6 +5,8 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { EmbeddingRateLimitError } from "./embedding-errors.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
@@ -26,6 +28,8 @@ export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
 const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-004": 2048,
 };
+
+const log = createSubsystemLogger("memory/embeddings");
 
 // --- gemini-embedding-2-preview support ---
 
@@ -129,6 +133,66 @@ export function resolveGeminiOutputDimensionality(
   }
   return requested;
 }
+
+/**
+ * Parse a Gemini 429 response body to extract quota type and retry delay.
+ *
+ * Gemini returns structured details like:
+ *   { "details": [
+ *       { "violations": [{ "quotaId": "...PerMinute..." }] },
+ *       { "retryDelay": "31s" }
+ *   ]}
+ */
+export function parseGemini429(payload: string): {
+  quotaType: "rpm" | "rpd" | "tpm" | "unknown";
+  retryDelayMs: number | null;
+} {
+  let quotaType: "rpm" | "rpd" | "tpm" | "unknown" = "unknown";
+  let retryDelayMs: number | null = null;
+
+  try {
+    const body = JSON.parse(payload) as {
+      error?: {
+        details?: Array<{
+          violations?: Array<{ quotaId?: string }>;
+          retryDelay?: string;
+        }>;
+      };
+    };
+
+    const details = body?.error?.details;
+    if (Array.isArray(details)) {
+      for (const detail of details) {
+        // Extract quota type from violations
+        if (Array.isArray(detail.violations)) {
+          for (const v of detail.violations) {
+            const qid = v.quotaId ?? "";
+            if (/PerDay/i.test(qid)) {
+              quotaType = "rpd";
+            } else if (/token.*PerMinute|PerMinute.*token/i.test(qid)) {
+              // Tokens-per-minute (e.g. "EmbedContentTokensPerMinutePerUser...")
+              quotaType = "tpm";
+            } else if (/PerMinute/i.test(qid)) {
+              quotaType = "rpm";
+            }
+          }
+        }
+        // Extract retry delay (e.g. "31s" -> 31000)
+        if (typeof detail.retryDelay === "string") {
+          const match = detail.retryDelay.match(/^(\d+(?:\.\d+)?)s$/);
+          if (match) {
+            retryDelayMs = Math.round(parseFloat(match[1]) * 1000);
+          }
+        }
+      }
+    }
+  } catch {
+    // If JSON parsing fails, leave defaults (unknown / null)
+  }
+
+  return { quotaType, retryDelayMs };
+}
+
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
   const trimmed = resolveMemorySecretInputString({
     value: remoteApiKey,
@@ -198,6 +262,32 @@ export async function createGeminiEmbeddingProvider(
       onResponse: async (res) => {
         if (!res.ok) {
           const text = await res.text();
+          if (res.status === 429) {
+            const rlHeaders: Record<string, string> = {};
+            res.headers.forEach((value, key) => {
+              if (/retry|limit|quota/i.test(key)) {
+                rlHeaders[key] = value;
+              }
+            });
+            if (Object.keys(rlHeaders).length > 0) {
+              log.info("gemini 429 rate limit headers", { headers: rlHeaders });
+            } else {
+              log.info("gemini 429 no rate limit headers found", {
+                availableHeaders: Array.from(res.headers.keys()),
+              });
+            }
+            const parsed = parseGemini429(text);
+            log.warn("gemini 429 parsed", {
+              quotaType: parsed.quotaType,
+              retryDelayMs: parsed.retryDelayMs,
+              responseBody: text.slice(0, 500),
+            });
+            throw new EmbeddingRateLimitError(
+              `gemini embeddings failed: ${res.status} ${text}`,
+              parsed.quotaType,
+              parsed.retryDelayMs,
+            );
+          }
           throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
         }
         return (await res.json()) as {

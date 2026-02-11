@@ -23,6 +23,7 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import { getOrCreateRateLimiter, type TokenBucketRateLimiter } from "./rate-limiter.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -92,6 +93,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastError?: string;
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
+  protected rateLimiter: TokenBucketRateLimiter | null = null;
   protected db: DatabaseSync;
   protected readonly sources: Set<MemorySource>;
   protected providerKey: string;
@@ -236,6 +238,33 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const statusOnly = params.purpose === "status";
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
+
+    // Initialize rate limiter based on provider
+    if (this.provider?.id === "gemini" && this.gemini) {
+      this.rateLimiter = getOrCreateRateLimiter("gemini", this.gemini, {
+        // Gemini published limits: 100 RPM, 30K TPM, 1K RPD (free tier)
+        // Token estimation uses /3 chars-per-token (accurate for code/org content),
+        // so the tpmLimit here maps almost 1:1 to actual Gemini tokens.
+        // 25K gives a ~17% safety margin under the 30K hard limit.
+        // 55 RPM is a conservative default; empirical free-tier peak is ~60 RPM.
+        rpmLimit: params.settings.remote?.batch?.rpmLimit ?? 55,
+        rpdLimit: params.settings.remote?.batch?.rpdLimit ?? 1000,
+        tpmLimit: params.settings.remote?.batch?.tpmLimit ?? 25000,
+        rpdSessionBudget: params.settings.remote?.batch?.rpdSessionBudget,
+      });
+    } else if (this.provider?.id === "openai" && this.openAi) {
+      this.rateLimiter = getOrCreateRateLimiter("openai", this.openAi, {
+        rpmLimit: params.settings.remote?.batch?.rpmLimit, // No default, opt-in
+        rpdLimit: params.settings.remote?.batch?.rpdLimit,
+        rpdSessionBudget: params.settings.remote?.batch?.rpdSessionBudget,
+      });
+    } else if (this.provider?.id === "voyage" && this.voyage) {
+      this.rateLimiter = getOrCreateRateLimiter("voyage", this.voyage, {
+        rpmLimit: params.settings.remote?.batch?.rpmLimit, // No default, opt-in
+        rpdLimit: params.settings.remote?.batch?.rpdLimit,
+        rpdSessionBudget: params.settings.remote?.batch?.rpdSessionBudget,
+      });
+    }
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -735,6 +764,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           lastError: this.readonlyRecoveryLastError,
         },
       },
+      rateLimit: this.rateLimiter
+        ? {
+            availableRpm: this.rateLimiter.getStatus().availableRpm,
+            availableRpd: this.rateLimiter.getStatus().availableRpd,
+            configuredRpm: this.settings.remote?.batch?.rpmLimit,
+            configuredRpd: this.settings.remote?.batch?.rpdLimit,
+          }
+        : undefined,
     };
   }
 

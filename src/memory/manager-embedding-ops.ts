@@ -8,6 +8,7 @@ import {
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
+import { isEmbeddingRateLimitError } from "./embedding-errors.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
 import { buildGeminiTextEmbeddingRequest } from "./embeddings-gemini.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { chunkOrgMode } from "./org-chunking.js";
+import type { TokenBucketRateLimiter } from "./rate-limiter.js";
 import type { SessionFileEntry } from "./session-files.js";
 import type { MemorySource } from "./types.js";
 
@@ -27,8 +29,26 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
+
+/**
+ * Estimate token count for text using a simple heuristic.
+ * Uses ~3 characters per token. Code and org-mode files tokenize more
+ * aggressively than English prose (~4 chars/token): identifiers, punctuation,
+ * and structural characters each tend to produce their own tokens. Empirically,
+ * the Gemini SentencePiece tokenizer runs at ~3.1 chars/token on mixed
+ * code/org content, so /3 gives a slight over-estimate — correct direction for
+ * a rate-limiter budget (prevents TPM overshoot).
+ */
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / 3);
+}
 const EMBEDDING_INDEX_CONCURRENCY = 4;
+// Gemini free tier has very tight concurrent-request limits; serialise direct API calls.
+const EMBEDDING_INDEX_CONCURRENCY_GEMINI = 1;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
+// Rate-limit 429s are transient — allow more retries since the rate limiter
+// already enforces cool-down waits, so extra attempts cost little.
+const EMBEDDING_RETRY_MAX_ATTEMPTS_RATE_LIMIT = 8;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
 const BATCH_FAILURE_LIMIT = 2;
@@ -47,6 +67,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
+  protected abstract rateLimiter: TokenBucketRateLimiter | null;
 
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
     const batches: MemoryChunk[][] = [];
@@ -352,6 +373,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     pollIntervalMs: number;
     timeoutMs: number;
     debug: (message: string, data?: Record<string, unknown>) => void;
+    rateLimiter?: TokenBucketRateLimiter;
   } {
     const { requests, chunks, source } = params;
     return {
@@ -366,6 +388,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           message,
           data ? { ...data, source, chunks: chunks.length } : { source, chunks: chunks.length },
         ),
+      rateLimiter: this.rateLimiter ?? undefined,
     };
   }
 
@@ -384,6 +407,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       pollIntervalMs: number;
       timeoutMs: number;
       debug: (message: string, data?: Record<string, unknown>) => void;
+      rateLimiter?: TokenBucketRateLimiter;
     }) => Promise<Map<string, number[]> | number[][]>;
   }): Promise<number[][]> {
     if (!params.enabled) {
@@ -509,6 +533,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
       try {
+        // Acquire rate limiter permit before making the API call
+        if (this.rateLimiter) {
+          const totalTokens = texts.reduce((sum, text) => sum + estimateTokenCount(text), 0);
+          // Use texts.length as requestCount so the rate limiter tracks actual API
+          // requests (one per text) rather than HTTP batch calls, keeping rpdSessionBudget
+          // and the RPD token bucket in sync with what providers like Gemini charge.
+          await this.rateLimiter.acquirePermit(texts.length, undefined, totalTokens);
+        }
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: this.provider.id,
@@ -521,8 +553,24 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
+        // Notify rate limiter if this was a rate limit error
+        if (isEmbeddingRateLimitError(err)) {
+          if (this.rateLimiter) {
+            this.rateLimiter.depleteQuotaForType(err.quotaType, err.retryDelayMs);
+          }
+        }
+
+        // RPD (requests per day) errors should not be retried - daily quota exhaustion
+        // requires waiting until the next day, not retrying after a few seconds
+        if (isEmbeddingRateLimitError(err) && err.quotaType === "rpd") {
+          throw err;
+        }
+
         const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        const maxAttempts = isEmbeddingRateLimitError(err)
+          ? EMBEDDING_RETRY_MAX_ATTEMPTS_RATE_LIMIT
+          : EMBEDDING_RETRY_MAX_ATTEMPTS;
+        if (!this.isRetryableEmbeddingError(message) || attempt >= maxAttempts) {
           throw err;
         }
         const waitMs = Math.min(
@@ -554,6 +602,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected async embedQueryWithTimeout(text: string): Promise<number[]> {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
+    }
+    // Acquire rate limiter permit before making the API call
+    if (this.rateLimiter) {
+      const tokenCount = estimateTokenCount(text);
+      await this.rateLimiter.acquirePermit(1, undefined, tokenCount);
     }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
@@ -693,7 +746,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    if (this.batch.enabled) {
+      return this.batch.concurrency;
+    }
+    // Gemini free tier enforces a low concurrent-request limit independent of
+    // RPM/TPM/RPD; sending 4 simultaneous requests reliably triggers load-based
+    // 429s even when quota headroom exists.
+    if (this.provider?.id === "gemini") {
+      return EMBEDDING_INDEX_CONCURRENCY_GEMINI;
+    }
+    return EMBEDDING_INDEX_CONCURRENCY;
   }
 
   protected async indexFile(

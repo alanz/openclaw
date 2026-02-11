@@ -11,6 +11,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath } from "../utils.js";
+import { isEmbeddingRateLimitError } from "./embedding-errors.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
@@ -1120,11 +1121,71 @@ export abstract class MemoryManagerSyncOps {
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
-      try {
-        this.db.close();
-      } catch {}
-      await this.removeIndexFiles(tempDbPath);
-      restoreOriginalState();
+      // On rate-limit errors, preserve partial progress by swapping in the temp DB,
+      // but only if the partial has at least as many indexed files as the original.
+      // If the quota ran out before re-indexing all previously-indexed files, the
+      // partial would be a regression — keep the original in that case.
+      if (isEmbeddingRateLimitError(err)) {
+        try {
+          const partialFileCount = (
+            this.db.prepare("SELECT COUNT(*) as c FROM files").get() as { c: number }
+          ).c;
+          const originalFileCount = (
+            originalDb.prepare("SELECT COUNT(*) as c FROM files").get() as { c: number }
+          ).c;
+
+          if (partialFileCount < originalFileCount) {
+            // Partial is a regression — discard the tmp and keep the original.
+            this.db.close();
+            await this.removeIndexFiles(tempDbPath);
+            restoreOriginalState();
+            log.warn("memory index: rate limit hit; kept original (partial had fewer files)", {
+              quotaType: err.quotaType,
+              partialFileCount,
+              originalFileCount,
+            });
+          } else {
+            const partialMeta: MemoryIndexMeta = {
+              model: this.provider?.model ?? "fts-only",
+              provider: this.provider?.id ?? "none",
+              providerKey: this.providerKey!,
+              chunkTokens: this.settings.chunking.tokens,
+              chunkOverlap: this.settings.chunking.overlap,
+            };
+            if (this.vector.available && this.vector.dims) {
+              partialMeta.vectorDims = this.vector.dims;
+            }
+            this.writeMeta(partialMeta);
+            this.db.close();
+            originalDb.close();
+            originalDbClosed = true;
+            await this.swapIndexFiles(dbPath, tempDbPath);
+            this.db = this.openDatabaseAtPath(dbPath);
+            this.vectorReady = null;
+            this.vector.available = null;
+            this.vector.loadError = undefined;
+            this.ensureSchema();
+            this.vector.dims = partialMeta.vectorDims;
+            log.warn("memory index: rate limit hit; partial index saved", {
+              quotaType: err.quotaType,
+              partialFileCount,
+              originalFileCount,
+            });
+          }
+        } catch {
+          try {
+            this.db.close();
+          } catch {}
+          await this.removeIndexFiles(tempDbPath);
+          restoreOriginalState();
+        }
+      } else {
+        try {
+          this.db.close();
+        } catch {}
+        await this.removeIndexFiles(tempDbPath);
+        restoreOriginalState();
+      }
       throw err;
     }
   }

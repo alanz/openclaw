@@ -55,6 +55,12 @@ export type MemoryProviderStatus = {
     lastError?: string;
     lastProvider?: string;
   };
+  rateLimit?: {
+    availableRpm: number | null;
+    availableRpd: number | null;
+    configuredRpm: number | undefined;
+    configuredRpd: number | undefined;
+  };
   custom?: Record<string, unknown>;
 };
 

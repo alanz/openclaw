@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
 
@@ -84,6 +84,7 @@ describe("memory index", () => {
       },
     }),
   ].join("\n");
+  let manager: MemoryIndexManager | null = null;
 
   // Perf: keep managers open across tests, but only reset the one a test uses.
   const managersByStorePath = new Map<string, MemoryIndexManager>();
@@ -126,6 +127,13 @@ describe("memory index", () => {
 
     // Clean additional paths that may have been created by earlier cases.
     await fs.rm(extraDir, { recursive: true, force: true });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
   });
 
   function resetManagerForTest(manager: MemoryIndexManager) {

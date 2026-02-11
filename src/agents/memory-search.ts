@@ -21,6 +21,10 @@ export type ResolvedMemorySearchConfig = {
       concurrency: number;
       pollIntervalMs: number;
       timeoutMinutes: number;
+      rpmLimit?: number;
+      rpdLimit?: number;
+      tpmLimit?: number;
+      rpdSessionBudget?: number;
     };
   };
   experimental: {
@@ -171,6 +175,10 @@ function mergeConfig(
       overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
     timeoutMinutes:
       overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
+    rpmLimit: overrideRemote?.batch?.rpmLimit ?? defaultRemote?.batch?.rpmLimit,
+    rpdLimit: overrideRemote?.batch?.rpdLimit ?? defaultRemote?.batch?.rpdLimit,
+    rpdSessionBudget:
+      overrideRemote?.batch?.rpdSessionBudget ?? defaultRemote?.batch?.rpdSessionBudget,
   };
   const remote = includeRemote
     ? {

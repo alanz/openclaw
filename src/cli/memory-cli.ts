@@ -8,6 +8,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
+import { isEmbeddingRateLimitError } from "../memory/embedding-errors.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
@@ -616,7 +617,11 @@ export function registerMemoryCli(program: Command) {
       const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
       emitMemorySecretResolveDiagnostics(diagnostics);
       const agentIds = resolveAgentIds(cfg, opts.agent);
+      let rpdExhausted = false;
       for (const agentId of agentIds) {
+        if (rpdExhausted) {
+          break;
+        }
         await withMemoryManagerForAgent({
           cfg,
           agentId,
@@ -737,6 +742,9 @@ export function registerMemoryCli(program: Command) {
               const message = formatErrorMessage(err);
               defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
               process.exitCode = 1;
+              if (isEmbeddingRateLimitError(err) && err.quotaType === "rpd") {
+                rpdExhausted = true;
+              }
             }
           },
         });

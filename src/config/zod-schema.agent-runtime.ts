@@ -581,6 +581,9 @@ export const MemorySearchSchema = z
             concurrency: z.number().int().positive().optional(),
             pollIntervalMs: z.number().int().nonnegative().optional(),
             timeoutMinutes: z.number().int().positive().optional(),
+            rpmLimit: z.number().int().positive().optional(),
+            rpdLimit: z.number().int().positive().optional(),
+            rpdSessionBudget: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),

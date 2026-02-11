@@ -19,6 +19,7 @@ import {
   withRemoteHttpResponse,
 } from "./batch-embedding-common.js";
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import type { TokenBucketRateLimiter } from "./rate-limiter.js";
 
 export type OpenAiBatchRequest = {
   custom_id: string;
@@ -41,7 +42,12 @@ async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
   requests: OpenAiBatchRequest[];
   agentId: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<OpenAiBatchStatus> {
+  // Acquire permits for file upload (1) + batch create (1)
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(2);
+  }
   const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const inputFileId = await uploadBatchJsonlFile({
     client: params.openAi,
@@ -192,6 +198,7 @@ export async function runOpenAiEmbeddingBatches(
     openAi: OpenAiEmbeddingClient;
     agentId: string;
     requests: OpenAiBatchRequest[];
+    rateLimiter?: TokenBucketRateLimiter;
   } & EmbeddingBatchExecutionParams,
 ): Promise<Map<string, number[]>> {
   return await runEmbeddingBatchGroups({
@@ -204,6 +211,7 @@ export async function runOpenAiEmbeddingBatches(
         openAi: params.openAi,
         requests: group,
         agentId: params.agentId,
+        rateLimiter: params.rateLimiter,
       });
       if (!batchInfo.id) {
         throw new Error("openai batch create failed: missing batch id");

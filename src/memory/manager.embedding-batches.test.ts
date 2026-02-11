@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
+import { EmbeddingRateLimitError } from "./embedding-errors.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
+import type { MemoryIndexManager } from "./index.js";
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
@@ -28,6 +30,15 @@ const fx = installEmbeddingManagerFixture({
 const { embedBatch } = fx;
 
 describe("memory embedding batches", () => {
+  let manager: MemoryIndexManager | null = null;
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
+  });
+
   it("splits large files across multiple embedding batches", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerLarge = fx.getManagerLarge();
@@ -138,4 +149,121 @@ describe("memory embedding batches", () => {
     const inputs = embedBatch.mock.calls.flatMap((call: unknown[]) => (call[0] as string[]) ?? []);
     expect(inputs).not.toContain("");
   });
+
+  it("retries on RPM EmbeddingRateLimitError (like existing 429 test)", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const workspaceDir = path.dirname(memoryDir);
+    const line = "f".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-09.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls < 3) {
+        throw new EmbeddingRateLimitError(
+          "gemini embeddings failed: 429 rate limit",
+          "rpm",
+          10_000,
+        );
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    const realSetTimeout = setTimeout;
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      const delay = typeof timeout === "number" ? timeout : 0;
+      if (delay > 0 && delay <= 15_000) {
+        return realSetTimeout(handler, 0, ...args);
+      }
+      return realSetTimeout(handler, delay, ...args);
+    }) as typeof setTimeout);
+
+    const indexPath = path.join(path.dirname(workspaceDir), "index-rpm-test.sqlite");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai" as const,
+            model: "mock-embed",
+            store: { path: indexPath },
+            chunking: { tokens: 200, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const { getMemorySearchManager } = await import("./index.js");
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager as MemoryIndexManager;
+    try {
+      await manager.sync({ force: true });
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+
+    expect(calls).toBe(3);
+  }, 10000);
+
+  it("does NOT retry on RPD EmbeddingRateLimitError (daily quota exhausted)", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const workspaceDir = path.dirname(memoryDir);
+    const line = "g".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-10.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async () => {
+      calls += 1;
+      throw new EmbeddingRateLimitError(
+        "gemini embeddings failed: 429 daily quota exhausted",
+        "rpd",
+        31_000,
+      );
+    });
+
+    const indexPath = path.join(path.dirname(workspaceDir), "index-rpd-test.sqlite");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai" as const,
+            model: "mock-embed",
+            store: { path: indexPath },
+            chunking: { tokens: 200, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const { getMemorySearchManager } = await import("./index.js");
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) {
+      throw new Error("manager missing");
+    }
+    manager = result.manager as MemoryIndexManager;
+
+    // sync should fail because RPD errors are not retried
+    await expect(manager.sync({ force: true })).rejects.toThrow("daily quota exhausted");
+
+    // Should have only been called once (no retries)
+    expect(calls).toBe(1);
+  }, 10000);
 });

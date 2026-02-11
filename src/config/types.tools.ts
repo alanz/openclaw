@@ -341,6 +341,12 @@ export type MemorySearchConfig = {
       pollIntervalMs?: number;
       /** Timeout in minutes (default: 60). */
       timeoutMinutes?: number;
+      /** Requests per minute limit (default: 100 for Gemini). */
+      rpmLimit?: number;
+      /** Requests per day limit (default: 1000 for Gemini). */
+      rpdLimit?: number;
+      /** Per-session RPD budget: stop indexing after this many requests this run. */
+      rpdSessionBudget?: number;
     };
   };
   /** Fallback behavior when embeddings fail. */

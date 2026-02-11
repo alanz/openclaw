@@ -21,6 +21,7 @@ import {
   withRemoteHttpResponse,
 } from "./batch-embedding-common.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import type { TokenBucketRateLimiter } from "./rate-limiter.js";
 
 /**
  * Voyage Batch API Input Line format.
@@ -67,7 +68,12 @@ async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<VoyageBatchStatus> {
+  // Acquire permits for file upload (1) + batch create (1)
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(2);
+  }
   const baseUrl = normalizeBatchBaseUrl(params.client);
   const inputFileId = await uploadBatchJsonlFile({
     client: params.client,
@@ -194,6 +200,7 @@ export async function runVoyageEmbeddingBatches(
     client: VoyageEmbeddingClient;
     agentId: string;
     requests: VoyageBatchRequest[];
+    rateLimiter?: TokenBucketRateLimiter;
   } & EmbeddingBatchExecutionParams,
 ): Promise<Map<string, number[]>> {
   return await runEmbeddingBatchGroups({
@@ -206,6 +213,7 @@ export async function runVoyageEmbeddingBatches(
         client: params.client,
         requests: group,
         agentId: params.agentId,
+        rateLimiter: params.rateLimiter,
       });
       if (!batchInfo.id) {
         throw new Error("voyage batch create failed: missing batch id");
