@@ -70,7 +70,7 @@ async function walkDir(dir: string, files: string[]) {
     if (!entry.isFile()) {
       continue;
     }
-    if (!entry.name.endsWith(".md")) {
+    if (!entry.name.endsWith(".md") && !entry.name.endsWith(".org")) {
       continue;
     }
     files.push(full);
@@ -92,7 +92,7 @@ export async function listMemoryFiles(
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return;
       }
-      if (!absPath.endsWith(".md")) {
+      if (!absPath.endsWith(".md") && !absPath.endsWith(".org")) {
         return;
       }
       result.push(absPath);
@@ -120,7 +120,7 @@ export async function listMemoryFiles(
           await walkDir(inputPath, result);
           continue;
         }
-        if (stat.isFile() && inputPath.endsWith(".md")) {
+        if (stat.isFile() && (inputPath.endsWith(".md") || inputPath.endsWith(".org"))) {
           result.push(inputPath);
         }
       } catch {}

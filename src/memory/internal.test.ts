@@ -56,6 +56,30 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("ignore.txt"))).toBe(false);
   });
 
+  it("includes .org files from workspace and additional paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const memoryDir = path.join(tmpDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "notes.org"), "* Org-mode notes");
+    await fs.writeFile(path.join(memoryDir, "markdown.md"), "# Markdown notes");
+
+    const extraDir = path.join(tmpDir, "org-notes");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "work.org"), "* Work notes");
+    await fs.writeFile(path.join(extraDir, "personal.org"), "* Personal notes");
+    await fs.writeFile(path.join(extraDir, "ignore.txt"), "Not an org file");
+
+    const files = await listMemoryFiles(tmpDir, [extraDir]);
+    expect(files).toHaveLength(5);
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("notes.org"))).toBe(true);
+    expect(files.some((file) => file.endsWith("markdown.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("work.org"))).toBe(true);
+    expect(files.some((file) => file.endsWith("personal.org"))).toBe(true);
+    expect(files.some((file) => file.endsWith("ignore.txt"))).toBe(false);
+  });
+
   it("includes files from additional paths (single file)", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
@@ -65,6 +89,18 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
+  });
+
+  it("includes single .org files from additional paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const orgFile = path.join(tmpDir, "notes.org");
+    await fs.writeFile(orgFile, "* Org notes");
+
+    const files = await listMemoryFiles(tmpDir, [orgFile]);
+    expect(files).toHaveLength(2);
+    expect(files.some((file) => file.endsWith("MEMORY.md"))).toBe(true);
+    expect(files.some((file) => file.endsWith("notes.org"))).toBe(true);
   });
 
   it("handles relative paths in additional paths", async () => {
