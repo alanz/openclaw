@@ -19,6 +19,7 @@ import {
   type MemoryFileEntry,
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { chunkOrgMode } from "./org-chunking.js";
 import type { SessionFileEntry } from "./session-files.js";
 import type { MemorySource } from "./types.js";
 
@@ -709,11 +710,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+
+    // Use org-aware chunking for .org files, markdown chunking for everything else
+    const isOrgFile = entry.absPath.toLowerCase().endsWith(".org");
+    const rawChunks = isOrgFile
+      ? chunkOrgMode(content, this.settings.chunking)
+      : chunkMarkdown(content, this.settings.chunking);
+
     const chunks = enforceEmbeddingMaxInputTokens(
       this.provider,
-      chunkMarkdown(content, this.settings.chunking).filter(
-        (chunk) => chunk.text.trim().length > 0,
-      ),
+      rawChunks.filter((chunk) => chunk.text.trim().length > 0),
       EMBEDDING_BATCH_MAX_TOKENS,
     );
     if (options.source === "sessions" && "lineMap" in entry) {
