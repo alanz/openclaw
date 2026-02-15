@@ -1,0 +1,76 @@
+* AI Research Notes
+:PROPERTIES:
+:ID: research-2026-02-15
+:CREATED: [2026-02-15 Sat]
+:TAGS: ai, research, memory
+:END:
+
+This document demonstrates org-mode chunking behavior.
+
+** Background
+*** Historical Context
+
+Memory systems have evolved significantly. Early systems used simple keyword matching,
+while modern approaches leverage neural embeddings for semantic search.
+
+#+BEGIN_QUOTE
+"The quality of retrieval depends critically on how we chunk the content."
+- Memory Systems Research, 2025
+#+END_QUOTE
+
+*** Current Approaches
+
+Modern systems typically use:
+1. Fixed-size chunking (simple but breaks context)
+2. Sentence-based chunking (better but misses structure)
+3. Structure-aware chunking (optimal for hierarchical content)
+
+** Implementation Details
+*** Vector Embeddings
+
+The core of semantic search relies on converting text to dense vectors.
+
+#+BEGIN_SRC python
+def generate_embedding(text: str) -> np.ndarray:
+    """Generate embedding for text chunk."""
+    # Tokenize and encode
+    tokens = tokenizer.encode(text)
+    # Generate embedding
+    embedding = model.encode(tokens)
+    return embedding
+#+END_SRC
+
+Key considerations:
+- Token limits (e.g., 512, 2048)
+- Embedding dimensions (384, 768, 1536)
+- Normalization and pooling strategies
+
+*** Chunking Strategy
+
+:LOGBOOK:
+- Implemented org-aware chunker [2026-02-15 Sat 10:00]
+- Added tests for edge cases [2026-02-15 Sat 11:00]
+:END:
+
+For org-mode files, we need to:
+- Respect heading boundaries
+- Never split code blocks
+- Preserve property drawers with their headings
+- Include parent heading context in chunks
+
+** Results
+
+Preliminary testing shows 40% improvement in retrieval quality when using
+structure-aware chunking versus naive line-based chunking.
+
+** Future Work
+
+:TODO:
+- [ ] Add support for org-mode links
+- [ ] Extract and index org properties
+- [ ] Handle org-mode tables
+- [ ] Support org-babel execution results
+:END:
+
+Next steps include testing on larger corpora and measuring impact on
+real-world retrieval tasks.

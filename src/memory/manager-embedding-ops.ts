@@ -22,6 +22,7 @@ import {
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./internal.js";
+import { chunkOrgMode } from "./org-chunking.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -691,11 +692,16 @@ class MemoryManagerEmbeddingOps {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+
+    // Use org-aware chunking for .org files, markdown chunking for everything else
+    const isOrgFile = entry.absPath.toLowerCase().endsWith(".org");
+    const rawChunks = isOrgFile
+      ? chunkOrgMode(content, this.settings.chunking)
+      : chunkMarkdown(content, this.settings.chunking);
+
     const chunks = enforceEmbeddingMaxInputTokens(
       this.provider,
-      chunkMarkdown(content, this.settings.chunking).filter(
-        (chunk) => chunk.text.trim().length > 0,
-      ),
+      rawChunks.filter((chunk) => chunk.text.trim().length > 0),
     );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
