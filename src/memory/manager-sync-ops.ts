@@ -282,6 +282,7 @@ class MemoryManagerSyncOps {
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory", "**", "*.md"),
+      path.join(this.workspaceDir, "memory", "**", "*.org"),
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -292,9 +293,13 @@ class MemoryManagerSyncOps {
         }
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
+          watchPaths.add(path.join(entry, "**", "*.org"));
           continue;
         }
-        if (stat.isFile() && entry.toLowerCase().endsWith(".md")) {
+        if (
+          stat.isFile() &&
+          (entry.toLowerCase().endsWith(".md") || entry.toLowerCase().endsWith(".org"))
+        ) {
           watchPaths.add(entry);
         }
       } catch {
