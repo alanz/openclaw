@@ -14,6 +14,8 @@ export type RateLimitConfig = {
   rpmLimit?: number;
   /** Requests per day limit (undefined = no limit) */
   rpdLimit?: number;
+  /** Tokens per minute limit (undefined = no limit) */
+  tpmLimit?: number;
   /** Account identifier for this rate limiter instance */
   accountKey: string;
   /** Cool-down period in milliseconds after a 429 error (default: 5000ms) */
@@ -28,6 +30,7 @@ export class TokenBucketRateLimiter {
   private readonly accountKey: string;
   private readonly rpmLimit?: number;
   private readonly rpdLimit?: number;
+  private readonly tpmLimit?: number;
   private readonly coolDownMs: number;
 
   // Minute bucket state
@@ -38,6 +41,10 @@ export class TokenBucketRateLimiter {
   private rpdTokens: number;
   private rpdLastRefill: number;
 
+  // Tokens per minute bucket state
+  private tpmTokens: number;
+  private tpmLastRefill: number;
+
   // Cool-down state
   private coolDownUntil: number = 0;
 
@@ -45,6 +52,7 @@ export class TokenBucketRateLimiter {
     this.accountKey = config.accountKey;
     this.rpmLimit = config.rpmLimit;
     this.rpdLimit = config.rpdLimit;
+    this.tpmLimit = config.tpmLimit;
     this.coolDownMs = config.coolDownMs ?? 5000;
 
     // Initialize tokens to full capacity
@@ -54,23 +62,28 @@ export class TokenBucketRateLimiter {
     this.rpdTokens = config.rpdLimit ?? 0;
     this.rpdLastRefill = Date.now();
 
+    this.tpmTokens = config.tpmLimit ?? 0;
+    this.tpmLastRefill = Date.now();
+
     log.info("rate limiter created", {
       accountKey: config.accountKey,
       rpmLimit: config.rpmLimit,
       rpdLimit: config.rpdLimit,
+      tpmLimit: config.tpmLimit,
     });
   }
 
   /**
    * Acquire permission to make N requests.
-   * Blocks until sufficient tokens are available in both buckets.
+   * Blocks until sufficient tokens are available in all buckets (RPM, RPD, TPM).
    * Throws an error if wait time would exceed maxWaitMs.
    *
    * @param requestCount - Number of requests to acquire permits for
    * @param maxWaitMs - Maximum time to wait in milliseconds (default: 10 minutes)
+   * @param tokenCount - Number of tokens to consume from TPM bucket (optional, defaults to 0)
    */
-  async acquirePermit(requestCount: number, maxWaitMs = 600_000): Promise<void> {
-    if (requestCount <= 0) {
+  async acquirePermit(requestCount: number, maxWaitMs = 600_000, tokenCount = 0): Promise<void> {
+    if (requestCount <= 0 && tokenCount <= 0) {
       return;
     }
 
@@ -108,24 +121,38 @@ export class TokenBucketRateLimiter {
         this.rpdLastRefill = now;
       }
 
-      // Check if we have enough tokens in both buckets
+      // Refill TPM bucket based on elapsed time
+      if (this.tpmLimit !== undefined) {
+        const elapsedMs = now - this.tpmLastRefill;
+        const tokensToAdd = (elapsedMs / 60_000) * this.tpmLimit;
+        this.tpmTokens = Math.min(this.tpmLimit, this.tpmTokens + tokensToAdd);
+        this.tpmLastRefill = now;
+      }
+
+      // Check if we have enough tokens in all buckets
       const rpmAvailable = this.rpmLimit === undefined || this.rpmTokens >= requestCount;
       const rpdAvailable = this.rpdLimit === undefined || this.rpdTokens >= requestCount;
+      const tpmAvailable = this.tpmLimit === undefined || this.tpmTokens >= tokenCount;
 
-      if (rpmAvailable && rpdAvailable) {
-        // Deduct tokens from both buckets
+      if (rpmAvailable && rpdAvailable && tpmAvailable) {
+        // Deduct tokens from all buckets
         if (this.rpmLimit !== undefined) {
           this.rpmTokens -= requestCount;
         }
         if (this.rpdLimit !== undefined) {
           this.rpdTokens -= requestCount;
         }
+        if (this.tpmLimit !== undefined) {
+          this.tpmTokens -= tokenCount;
+        }
 
         log.debug("rate limiter: permits acquired", {
           accountKey: this.accountKey,
           requestCount,
+          tokenCount,
           rpmRemaining: this.rpmLimit !== undefined ? Math.floor(this.rpmTokens) : null,
           rpdRemaining: this.rpdLimit !== undefined ? Math.floor(this.rpdTokens) : null,
+          tpmRemaining: this.tpmLimit !== undefined ? Math.floor(this.tpmTokens) : null,
         });
 
         return;
@@ -133,7 +160,7 @@ export class TokenBucketRateLimiter {
 
       // Calculate wait time for next available token
       let waitMs = 0;
-      let limitType: "rpm" | "rpd" | null = null;
+      let limitType: "rpm" | "rpd" | "tpm" | null = null;
 
       if (!rpmAvailable && this.rpmLimit !== undefined) {
         const tokensNeeded = requestCount - this.rpmTokens;
@@ -155,6 +182,16 @@ export class TokenBucketRateLimiter {
         }
       }
 
+      if (!tpmAvailable && this.tpmLimit !== undefined) {
+        const tokensNeeded = tokenCount - this.tpmTokens;
+        const msPerToken = 60_000 / this.tpmLimit;
+        const tpmWait = tokensNeeded * msPerToken;
+        if (tpmWait > waitMs) {
+          waitMs = tpmWait;
+          limitType = "tpm";
+        }
+      }
+
       // Add small buffer to avoid tight loops
       waitMs = Math.max(100, waitMs);
 
@@ -162,8 +199,14 @@ export class TokenBucketRateLimiter {
       if (waitMs > maxWaitMs) {
         const waitMinutes = Math.ceil(waitMs / 60_000);
         const availableAt = new Date(now + waitMs);
-        const limitName = limitType === "rpm" ? "per-minute" : "per-day";
-        const limitValue = limitType === "rpm" ? this.rpmLimit : this.rpdLimit;
+        const limitName =
+          limitType === "rpm"
+            ? "per-minute (RPM)"
+            : limitType === "tpm"
+              ? "tokens-per-minute (TPM)"
+              : "per-day (RPD)";
+        const limitValue =
+          limitType === "rpm" ? this.rpmLimit : limitType === "tpm" ? this.tpmLimit : this.rpdLimit;
 
         log.warn("rate limiter: quota exhausted, wait exceeds maximum", {
           accountKey: this.accountKey,
@@ -196,7 +239,12 @@ export class TokenBucketRateLimiter {
         waitDescription = minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
       }
 
-      const limitName = limitType === "rpm" ? "per-minute (RPM)" : "per-day (RPD)";
+      const limitName =
+        limitType === "rpm"
+          ? "per-minute (RPM)"
+          : limitType === "tpm"
+            ? "tokens-per-minute (TPM)"
+            : "per-day (RPD)";
       const availableAt = new Date(now + waitMs).toLocaleTimeString();
 
       // Calculate what percentage of each quota is available
@@ -204,16 +252,21 @@ export class TokenBucketRateLimiter {
         this.rpmLimit !== undefined ? Math.round((this.rpmTokens / this.rpmLimit) * 100) : null;
       const rpdPercent =
         this.rpdLimit !== undefined ? Math.round((this.rpdTokens / this.rpdLimit) * 100) : null;
+      const tpmPercent =
+        this.tpmLimit !== undefined ? Math.round((this.tpmTokens / this.tpmLimit) * 100) : null;
 
-      log.warn("rate limiter: quota exhausted, waiting", {
+      log.warn(`rate limiter: ${limitType?.toUpperCase()} quota exhausted, waiting`, {
         accountKey: this.accountKey,
         limitingBucket: limitType,
         limitName,
         reason:
           limitType === "rpm"
             ? `Per-minute quota exhausted (${Math.floor(this.rpmTokens)}/${this.rpmLimit} available)`
-            : `Per-day quota exhausted (${Math.floor(this.rpdTokens)}/${this.rpdLimit} available)`,
+            : limitType === "tpm"
+              ? `Tokens-per-minute quota exhausted (${Math.floor(this.tpmTokens)}/${this.tpmLimit} available)`
+              : `Per-day quota exhausted (${Math.floor(this.rpdTokens)}/${this.rpdLimit} available)`,
         requestCount,
+        tokenCount,
         waitTime: waitDescription,
         availableAt,
         rpm:
@@ -223,6 +276,10 @@ export class TokenBucketRateLimiter {
         rpd:
           this.rpdLimit !== undefined
             ? `${Math.floor(this.rpdTokens)}/${this.rpdLimit} (${rpdPercent}%)`
+            : null,
+        tpm:
+          this.tpmLimit !== undefined
+            ? `${Math.floor(this.tpmTokens)}/${this.tpmLimit} (${tpmPercent}%)`
             : null,
       });
 
@@ -236,6 +293,7 @@ export class TokenBucketRateLimiter {
   getStatus(): {
     availableRpm: number | null;
     availableRpd: number | null;
+    availableTpm: number | null;
     inCoolDown: boolean;
     coolDownRemainingMs: number | null;
   } {
@@ -256,6 +314,13 @@ export class TokenBucketRateLimiter {
       rpdAvailable = Math.floor(Math.min(this.rpdLimit, this.rpdTokens + tokensToAdd));
     }
 
+    let tpmAvailable: number | null = null;
+    if (this.tpmLimit !== undefined) {
+      const elapsedMs = now - this.tpmLastRefill;
+      const tokensToAdd = (elapsedMs / 60_000) * this.tpmLimit;
+      tpmAvailable = Math.floor(Math.min(this.tpmLimit, this.tpmTokens + tokensToAdd));
+    }
+
     // Check cool-down status
     const inCoolDown = this.coolDownUntil > now;
     const coolDownRemainingMs = inCoolDown ? this.coolDownUntil - now : null;
@@ -263,6 +328,7 @@ export class TokenBucketRateLimiter {
     return {
       availableRpm: rpmAvailable,
       availableRpd: rpdAvailable,
+      availableTpm: tpmAvailable,
       inCoolDown,
       coolDownRemainingMs,
     };
@@ -276,6 +342,8 @@ export class TokenBucketRateLimiter {
     this.rpmLastRefill = Date.now();
     this.rpdTokens = this.rpdLimit ?? 0;
     this.rpdLastRefill = Date.now();
+    this.tpmTokens = this.tpmLimit ?? 0;
+    this.tpmLastRefill = Date.now();
     this.coolDownUntil = 0;
     log.debug("rate limiter reset", { accountKey: this.accountKey });
   }
@@ -312,17 +380,19 @@ export class TokenBucketRateLimiter {
    *
    * - "rpm": only zeros the per-minute bucket
    * - "rpd": only zeros the per-day bucket (longer default cool-down)
-   * - "unknown": zeros both buckets (legacy behavior)
+   * - "tpm": only zeros the tokens-per-minute bucket
+   * - "unknown": zeros all buckets (legacy behavior)
    *
    * @param quotaType - Which quota was exhausted
    * @param coolDownOverrideMs - Optional cool-down from the API response (e.g. retryDelay)
    */
   depleteQuotaForType(
-    quotaType: "rpm" | "rpd" | "unknown",
+    quotaType: "rpm" | "rpd" | "tpm" | "unknown",
     coolDownOverrideMs?: number | null,
   ): void {
     const hadRpmTokens = Math.floor(this.rpmTokens);
     const hadRpdTokens = Math.floor(this.rpdTokens);
+    const hadTpmTokens = Math.floor(this.tpmTokens);
 
     // Zero the appropriate bucket(s)
     if (quotaType === "rpm" || quotaType === "unknown") {
@@ -330,6 +400,9 @@ export class TokenBucketRateLimiter {
     }
     if (quotaType === "rpd" || quotaType === "unknown") {
       this.rpdTokens = 0;
+    }
+    if (quotaType === "tpm" || quotaType === "unknown") {
+      this.tpmTokens = 0;
     }
 
     // Determine base cool-down: use API-provided override, or type-specific default
@@ -350,8 +423,10 @@ export class TokenBucketRateLimiter {
       quotaType,
       rpmLimit: this.rpmLimit,
       rpdLimit: this.rpdLimit,
+      tpmLimit: this.tpmLimit,
       hadRpmTokens,
       hadRpdTokens,
+      hadTpmTokens,
       baseCoolDownMs,
       coolDownWithJitter,
       coolDownOverrideMs: coolDownOverrideMs ?? null,
@@ -411,10 +486,10 @@ function getVoyageAccountKey(voyage: VoyageEmbeddingClient): string {
 export function getOrCreateRateLimiter(
   provider: "gemini" | "openai" | "voyage",
   client: GeminiEmbeddingClient | OpenAiEmbeddingClient | VoyageEmbeddingClient,
-  config: { rpmLimit?: number; rpdLimit?: number },
+  config: { rpmLimit?: number; rpdLimit?: number; tpmLimit?: number },
 ): TokenBucketRateLimiter | null {
   // If no limits configured, return null (no rate limiting)
-  if (!config.rpmLimit && !config.rpdLimit) {
+  if (!config.rpmLimit && !config.rpdLimit && !config.tpmLimit) {
     return null;
   }
 
@@ -432,6 +507,7 @@ export function getOrCreateRateLimiter(
     limiter = new TokenBucketRateLimiter({
       rpmLimit: config.rpmLimit,
       rpdLimit: config.rpdLimit,
+      tpmLimit: config.tpmLimit,
       accountKey,
     });
     RATE_LIMITER_CACHE.set(accountKey, limiter);

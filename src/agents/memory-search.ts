@@ -22,6 +22,7 @@ export type ResolvedMemorySearchConfig = {
       timeoutMinutes: number;
       rpmLimit?: number;
       rpdLimit?: number;
+      tpmLimit?: number;
     };
   };
   experimental: {

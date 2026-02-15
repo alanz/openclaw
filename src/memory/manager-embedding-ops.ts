@@ -28,6 +28,14 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
+
+/**
+ * Estimate token count for text using a simple heuristic.
+ * Uses ~4 characters per token as a rough estimate for English text.
+ */
+function estimateTokenCount(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -497,6 +505,11 @@ class MemoryManagerEmbeddingOps {
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
     while (true) {
       try {
+        // Acquire rate limiter permit before making the API call
+        if (this.rateLimiter) {
+          const totalTokens = texts.reduce((sum, text) => sum + estimateTokenCount(text), 0);
+          await this.rateLimiter.acquirePermit(1, undefined, totalTokens);
+        }
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: this.provider.id,
@@ -509,6 +522,13 @@ class MemoryManagerEmbeddingOps {
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
+        // Notify rate limiter if this was a rate limit error
+        if (isEmbeddingRateLimitError(err)) {
+          if (this.rateLimiter) {
+            this.rateLimiter.depleteQuotaForType(err.quotaType, err.retryDelayMs);
+          }
+        }
+
         // RPD (requests per day) errors should not be retried - daily quota exhaustion
         // requires waiting until the next day, not retrying after a few seconds
         if (isEmbeddingRateLimitError(err) && err.quotaType === "rpd") {
@@ -546,6 +566,11 @@ class MemoryManagerEmbeddingOps {
   }
 
   private async embedQueryWithTimeout(text: string): Promise<number[]> {
+    // Acquire rate limiter permit before making the API call
+    if (this.rateLimiter) {
+      const tokenCount = estimateTokenCount(text);
+      await this.rateLimiter.acquirePermit(1, undefined, tokenCount);
+    }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(

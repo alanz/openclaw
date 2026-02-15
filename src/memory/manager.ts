@@ -229,8 +229,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     // Initialize rate limiter based on provider
     if (this.provider.id === "gemini" && this.gemini) {
       this.rateLimiter = getOrCreateRateLimiter("gemini", this.gemini, {
-        rpmLimit: params.settings.remote?.batch?.rpmLimit ?? 100, // Gemini default
-        rpdLimit: params.settings.remote?.batch?.rpdLimit ?? 1000, // Gemini default
+        // Gemini published: 100 RPM, empirical free tier: ~60 RPM, 30K TPM
+        // TPM is the real bottleneck: enforce at 28K for safety margin
+        // 55 RPM provides good throughput while staying under limits (~28K TPM at typical chunk sizes)
+        rpmLimit: params.settings.remote?.batch?.rpmLimit ?? 55,
+        rpdLimit: params.settings.remote?.batch?.rpdLimit ?? 1000,
+        tpmLimit: params.settings.remote?.batch?.tpmLimit ?? 28000, // 28K TPM (safety margin under 30K)
       });
     } else if (this.provider.id === "openai" && this.openAi) {
       this.rateLimiter = getOrCreateRateLimiter("openai", this.openAi, {

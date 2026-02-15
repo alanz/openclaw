@@ -163,7 +163,12 @@ async function submitGeminiBatch(params: {
 async function fetchGeminiBatchStatus(params: {
   gemini: GeminiEmbeddingClient;
   batchName: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<GeminiBatchStatus> {
+  // Acquire rate limiter permit before making the API call
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(1);
+  }
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const name = params.batchName.startsWith("batches/")
     ? params.batchName
@@ -183,7 +188,12 @@ async function fetchGeminiBatchStatus(params: {
 async function fetchGeminiFileContent(params: {
   gemini: GeminiEmbeddingClient;
   fileId: string;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<string> {
+  // Acquire rate limiter permit before making the API call
+  if (params.rateLimiter) {
+    await params.rateLimiter.acquirePermit(1);
+  }
   const baseUrl = normalizeBatchBaseUrl(params.gemini);
   const file = params.fileId.startsWith("files/") ? params.fileId : `files/${params.fileId}`;
   const downloadUrl = `${baseUrl}/${file}:download`;
@@ -217,6 +227,7 @@ async function waitForGeminiBatch(params: {
   timeoutMs: number;
   debug?: (message: string, data?: Record<string, unknown>) => void;
   initial?: GeminiBatchStatus;
+  rateLimiter?: TokenBucketRateLimiter;
 }): Promise<{ outputFileId: string }> {
   const start = Date.now();
   let current: GeminiBatchStatus | undefined = params.initial;
@@ -226,6 +237,7 @@ async function waitForGeminiBatch(params: {
       (await fetchGeminiBatchStatus({
         gemini: params.gemini,
         batchName: params.batchName,
+        rateLimiter: params.rateLimiter,
       }));
     const state = status.state ?? "UNKNOWN";
     if (["SUCCEEDED", "COMPLETED", "DONE"].includes(state)) {
@@ -318,6 +330,7 @@ export async function runGeminiEmbeddingBatches(params: {
             timeoutMs: params.timeoutMs,
             debug: params.debug,
             initial: batchInfo,
+            rateLimiter: params.rateLimiter,
           });
     if (!completed.outputFileId) {
       throw new Error(`gemini batch ${batchName} completed without output file`);
@@ -326,6 +339,7 @@ export async function runGeminiEmbeddingBatches(params: {
     const content = await fetchGeminiFileContent({
       gemini: params.gemini,
       fileId: completed.outputFileId,
+      rateLimiter: params.rateLimiter,
     });
     const outputLines = parseGeminiBatchOutput(content);
     const errors: string[] = [];
