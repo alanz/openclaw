@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "./embedding.test-mocks.js";
 import { EmbeddingRateLimitError } from "./embedding-errors.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";

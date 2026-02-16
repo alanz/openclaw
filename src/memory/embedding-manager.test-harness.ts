@@ -73,6 +73,9 @@ export function installEmbeddingManagerFixture(opts: {
       }),
       agentId: "main",
     });
+    if (!large.manager) {
+      throw new Error(`Failed to create managerLarge: ${large.error ?? "unknown error"}`);
+    }
     expect(large.manager).not.toBeNull();
     managerLarge = requireIndexManager(large.manager, "managerLarge");
 
