@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import { getEmbedBatchMock, getEmbedQueryMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
 import {
   getMemorySearchManager,
   type MemoryIndexManager,
@@ -22,6 +22,7 @@ export function installEmbeddingManagerFixture(opts: {
   resetIndexEachTest?: boolean;
 }) {
   const embedBatch = getEmbedBatchMock();
+  const embedQuery = getEmbedQueryMock();
   const resetIndexEachTest = opts.resetIndexEachTest ?? true;
 
   let fixtureRoot: string | undefined;
@@ -117,6 +118,7 @@ export function installEmbeddingManagerFixture(opts: {
 
   return {
     embedBatch,
+    embedQuery,
     getFixtureRoot: () => requireValue(fixtureRoot, "fixtureRoot"),
     getWorkspaceDir: () => requireValue(workspaceDir, "workspaceDir"),
     getMemoryDir: () => requireValue(memoryDir, "memoryDir"),
