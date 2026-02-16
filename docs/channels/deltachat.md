@@ -63,13 +63,14 @@ Controls who can send direct messages to your agent:
 
 Controls which groups your agent participates in:
 
-| Policy      | Description                                             |
-| ----------- | ------------------------------------------------------- |
-| `disabled`  | No group messages allowed                               |
-| `allowlist` | Only groups listed in `groups` config can send messages |
-| `open`      | Any group can send messages (not recommended)           |
+| Policy      | Description                                                       |
+| ----------- | ----------------------------------------------------------------- |
+| `allowlist` | Only groups listed in `groups` config can send messages (default) |
+| `open`      | Any group can send messages (not recommended)                     |
 
 ### Allowlist Configuration
+
+#### Direct Messages (DMs)
 
 ```yaml
 channels:
@@ -78,16 +79,60 @@ channels:
       enabled: true
       policy: "pairing" # or "allowlist", "disabled", "open"
       allowFrom:
-        - "user:alice@example.com"
-        - "user:bob@example.com"
-        - "deltachat:charlie@example.com" # Alternative prefix
+        - "alice@example.com"
+        - "bob@example.com"
         - "*" # Allow all (use with caution)
+```
 
+#### Groups
+
+Groups are configured by chat ID. When a message is dropped, you'll see the group ID in the logs:
+
+```
+dropping message from group 16 (not in allowlist)
+```
+
+You can add groups using the CLI command:
+
+```bash
+# Add a group with all users allowed
+openclaw channels groups add --channel deltachat --group 16 --users "*"
+
+# Add a group with specific users
+openclaw channels groups add --channel deltachat --group 42 \
+  --users "alice@example.com,bob@example.com" \
+  --require-mention
+
+# List all configured groups
+openclaw channels groups list --channel deltachat
+
+# Show details for a specific group
+openclaw channels groups show --channel deltachat --group 16
+```
+
+Or configure directly in YAML:
+
+```yaml
+channels:
+  deltachat:
+    groupPolicy: "allowlist" # Default, only allow listed groups
     groups:
-      policy: "allowlist" # or "disabled", "open"
-      allowFrom:
-        - "group:My Team"
-        - "group:Support Chat"
+      "16": # Chat ID from logs
+        users: ["*"] # Allow all users in this group
+        requireMention: false # Bot responds to all messages
+        tools: "allow" # Allow tool usage
+      "42":
+        users:
+          - "alice@example.com"
+          - "bob@example.com"
+        requireMention: true # Require @mention to trigger bot
+        tools: "deny" # Disable tool usage in this group
+```
+
+**Note**: After modifying group configuration, restart the gateway:
+
+```bash
+openclaw daemon restart
 ```
 
 ### Pairing Mode
@@ -251,6 +296,8 @@ Delta.Chat can work alongside other channels (Telegram, Discord, Signal, etc.). 
 ## Related Commands
 
 - `openclaw channels status` - Check Delta.Chat channel status
+- `openclaw channels groups list --channel deltachat` - List configured groups
+- `openclaw channels groups add --channel deltachat --group <id>` - Add a group to allowlist
 - `openclaw pairing approve --channel deltachat --code <code>` - Approve a pairing request
 - `openclaw config set channels.deltachat.enabled true` - Enable Delta.Chat channel
 

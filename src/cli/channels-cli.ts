@@ -7,6 +7,11 @@ import {
   channelsRemoveCommand,
   channelsResolveCommand,
   channelsStatusCommand,
+  channelsGroupsListCommand,
+  channelsGroupsAddCommand,
+  channelsGroupsRemoveCommand,
+  channelsGroupsUpdateCommand,
+  channelsGroupsShowCommand,
 } from "../commands/channels.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
@@ -243,5 +248,77 @@ export function registerChannelsCli(program: Command) {
           defaultRuntime,
         );
       }, "Channel logout failed");
+    });
+
+  // Groups management subcommand
+  const groups = channels.command("groups").description("Manage channel group allowlists");
+
+  groups
+    .command("list")
+    .description("List configured groups in the allowlist")
+    .option("--channel <name>", "Channel (deltachat, telegram, slack)", "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        await channelsGroupsListCommand(opts, defaultRuntime);
+      });
+    });
+
+  groups
+    .command("add")
+    .description("Add a group to the allowlist")
+    .option("--channel <name>", "Channel (deltachat, telegram, slack)", "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .requiredOption("--group <id>", "Group/chat ID")
+    .option("--users <list>", "Comma-separated list of allowed users (* for all)")
+    .option("--require-mention", "Require @mention to trigger bot", false)
+    .option("--no-require-mention", "Don't require @mention")
+    .option("--tools <policy>", 'Tool policy (allow, deny, or JSON like {"allow":["tool1"]})')
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        await channelsGroupsAddCommand(opts, defaultRuntime);
+      });
+    });
+
+  groups
+    .command("remove")
+    .description("Remove a group from the allowlist")
+    .option("--channel <name>", "Channel (deltachat, telegram, slack)", "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .requiredOption("--group <id>", "Group/chat ID")
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        await channelsGroupsRemoveCommand(opts, defaultRuntime);
+      });
+    });
+
+  groups
+    .command("update")
+    .description("Update group settings")
+    .option("--channel <name>", "Channel (deltachat, telegram, slack)", "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .requiredOption("--group <id>", "Group/chat ID")
+    .option("--users <list>", "Comma-separated list of allowed users (* for all)")
+    .option("--require-mention", "Require @mention to trigger bot", false)
+    .option("--no-require-mention", "Don't require @mention")
+    .option("--tools <policy>", 'Tool policy (allow, deny, or JSON like {"allow":["tool1"]})')
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        await channelsGroupsUpdateCommand(opts, defaultRuntime);
+      });
+    });
+
+  groups
+    .command("show")
+    .description("Show group details")
+    .option("--channel <name>", "Channel (deltachat, telegram, slack)", "deltachat")
+    .option("--account <id>", "Account id (default when omitted)")
+    .requiredOption("--group <id>", "Group/chat ID")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runChannelsCommand(async () => {
+        await channelsGroupsShowCommand(opts, defaultRuntime);
+      });
     });
 }
