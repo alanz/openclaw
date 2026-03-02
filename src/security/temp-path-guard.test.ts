@@ -192,6 +192,8 @@ describe("temp path guard", () => {
     expect(shouldSkip("src/commands/test-helpers.ts")).toBe(true);
     expect(shouldSkip("src/commands/sessions.test-helpers.ts")).toBe(true);
     expect(shouldSkip("src\\commands\\sessions.test-helpers.ts")).toBe(true);
+    expect(shouldSkip("src/gateway/server.auth.control-ui.suite.ts")).toBe(true);
+    expect(shouldSkip("src/gateway/server.auth.default-token.suite.ts")).toBe(true);
   });
 
   it("detects dynamic and ignores static fixtures", () => {
