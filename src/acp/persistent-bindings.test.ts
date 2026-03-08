@@ -249,6 +249,96 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     expect(splitIds?.record.targetSessionKey).toBe(canonical?.record.targetSessionKey);
   });
 
+  it("resolves deltachat group ACP binding by plain numeric chatId", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "default",
+            peer: { kind: "group", id: "42" },
+          },
+          acp: {
+            backend: "acpx",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "deltachat",
+      accountId: "default",
+      conversationId: "42",
+    });
+
+    expect(resolved?.spec.channel).toBe("deltachat");
+    expect(resolved?.spec.conversationId).toBe("42");
+    expect(resolved?.spec.agentId).toBe("codex");
+    expect(resolved?.spec.backend).toBe("acpx");
+    expect(resolved?.record.targetSessionKey).toMatch(
+      /^agent:codex:acp:binding:deltachat:default:/,
+    );
+  });
+
+  it("returns null for deltachat binding when conversationId is not a plain integer", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "default",
+            peer: { kind: "group", id: "42" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "deltachat",
+      accountId: "default",
+      // Non-numeric ID should be rejected
+      conversationId: "deltachat:group:42",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("resolves deltachat binding with wildcard accountId", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "*",
+            peer: { kind: "group", id: "99" },
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "deltachat",
+      accountId: "myaccount",
+      conversationId: "99",
+    });
+
+    expect(resolved?.spec.channel).toBe("deltachat");
+    expect(resolved?.spec.conversationId).toBe("99");
+    expect(resolved?.spec.agentId).toBe("codex");
+  });
+
   it("skips telegram non-group topic configs", () => {
     const cfg = {
       ...baseCfg,
@@ -355,6 +445,42 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
 
     expect(spec?.channel).toBe("discord");
     expect(spec?.conversationId).toBe("1478836151241412759");
+    expect(spec?.agentId).toBe("codex");
+    expect(spec?.backend).toBe("acpx");
+  });
+
+  it("resolves deltachat binding spec by session key", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "default",
+            peer: { kind: "group", id: "42" },
+          },
+          acp: {
+            backend: "acpx",
+          },
+        },
+      ],
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "deltachat",
+      accountId: "default",
+      conversationId: "42",
+    });
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+
+    expect(spec?.channel).toBe("deltachat");
+    expect(spec?.conversationId).toBe("42");
     expect(spec?.agentId).toBe("codex");
     expect(spec?.backend).toBe("acpx");
   });

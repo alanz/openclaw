@@ -21,7 +21,7 @@ import {
 
 function normalizeBindingChannel(value: string | undefined): ConfiguredAcpBindingChannel | null {
   const normalized = (value ?? "").trim().toLowerCase();
-  if (normalized === "discord" || normalized === "telegram") {
+  if (normalized === "discord" || normalized === "telegram" || normalized === "deltachat") {
     return normalized;
   }
   return null;
@@ -150,6 +150,25 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
       const spec = toConfiguredBindingSpec({
         cfg: params.cfg,
         channel: "discord",
+        accountId: parsedSessionKey.accountId,
+        conversationId: targetConversationId,
+        binding,
+      });
+      if (buildConfiguredAcpSessionKey(spec) === sessionKey) {
+        if (accountMatchPriority === 2) {
+          return spec;
+        }
+        if (!wildcardMatch) {
+          wildcardMatch = spec;
+        }
+      }
+      continue;
+    }
+    if (channel === "deltachat") {
+      // Delta Chat uses plain numeric chat IDs — match directly, no topic nesting.
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "deltachat",
         accountId: parsedSessionKey.accountId,
         conversationId: targetConversationId,
         binding,
@@ -327,6 +346,57 @@ export function resolveConfiguredAcpBindingRecord(params: {
         accountId,
         conversationId: parsed.canonicalConversationId,
         parentConversationId: parsed.chatId,
+        binding: wildcardMatch,
+      });
+      return {
+        spec,
+        record: toConfiguredAcpBindingRecord(spec),
+      };
+    }
+    return null;
+  }
+
+  if (channel === "deltachat") {
+    // Delta Chat group chat IDs are plain positive integers — match directly.
+    if (!/^\d+$/.test(conversationId)) {
+      return null;
+    }
+    let wildcardMatch: AgentAcpBinding | null = null;
+    for (const binding of listAcpBindings(params.cfg)) {
+      if (normalizeBindingChannel(binding.match.channel) !== "deltachat") {
+        continue;
+      }
+      const accountMatchPriority = resolveAccountMatchPriority(binding.match.accountId, accountId);
+      if (accountMatchPriority === 0) {
+        continue;
+      }
+      const bindingConversationId = resolveBindingConversationId(binding);
+      if (!bindingConversationId || bindingConversationId !== conversationId) {
+        continue;
+      }
+      if (accountMatchPriority === 2) {
+        const spec = toConfiguredBindingSpec({
+          cfg: params.cfg,
+          channel: "deltachat",
+          accountId,
+          conversationId,
+          binding,
+        });
+        return {
+          spec,
+          record: toConfiguredAcpBindingRecord(spec),
+        };
+      }
+      if (!wildcardMatch) {
+        wildcardMatch = binding;
+      }
+    }
+    if (wildcardMatch) {
+      const spec = toConfiguredBindingSpec({
+        cfg: params.cfg,
+        channel: "deltachat",
+        accountId,
+        conversationId,
         binding: wildcardMatch,
       });
       return {

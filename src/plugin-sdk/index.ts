@@ -94,6 +94,12 @@ export {
 } from "../acp/runtime/registry.js";
 export { ACP_ERROR_CODES, AcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
+export type { ConfiguredAcpBindingChannel } from "../acp/persistent-bindings.types.js";
+export { ensureConfiguredAcpBindingSession } from "../acp/persistent-bindings.lifecycle.js";
+export {
+  resolveConfiguredAcpRoute,
+  ensureConfiguredAcpRouteReady,
+} from "../acp/persistent-bindings.route.js";
 export type {
   AnyAgentTool,
   OpenClawPluginConfigSchema,

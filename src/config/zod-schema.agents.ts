@@ -71,11 +71,12 @@ const AcpBindingSchema = z
       return;
     }
     const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram") {
+    if (channel !== "discord" && channel !== "telegram" && channel !== "deltachat") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "channel"],
-        message: 'ACP bindings currently support only "discord" and "telegram" channels.',
+        message:
+          'ACP bindings currently support only "discord", "telegram", and "deltachat" channels.',
       });
       return;
     }
@@ -85,6 +86,13 @@ const AcpBindingSchema = z
         path: ["match", "peer", "id"],
         message:
           "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
+      });
+    }
+    if (channel === "deltachat" && !/^\d+$/.test(peerId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["match", "peer", "id"],
+        message: 'Delta Chat ACP bindings require a plain numeric group chat ID (e.g. "42").',
       });
     }
   });

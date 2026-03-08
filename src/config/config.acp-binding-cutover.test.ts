@@ -144,4 +144,44 @@ describe("ACP binding cutover schema", () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it("accepts deltachat ACP binding with numeric group chatId", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "default",
+            peer: { kind: "group", id: "42" },
+          },
+          acp: {
+            backend: "acpx",
+            mode: "persistent",
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects deltachat ACP binding with non-numeric peer ID", () => {
+    const parsed = OpenClawSchema.safeParse({
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "deltachat",
+            accountId: "default",
+            peer: { kind: "group", id: "deltachat:group:42" },
+          },
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });
