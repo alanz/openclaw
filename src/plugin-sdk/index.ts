@@ -829,3 +829,7 @@ export type { ResolvedProviderAuth } from "../agents/model-auth.js";
 
 // Security utilities
 export { redactSensitiveText } from "../logging/redact.js";
+
+// Outbound hook utilities for plugin channels with self-managed delivery
+export { emitOutboundMessageSent } from "./outbound-hooks.js";
+export type { EmitOutboundMessageSentParams } from "./outbound-hooks.js";
